@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Comprehensive SQL Server to PostgreSQL SQL Dump Converter
-Converts SQL Server .sql dump files to PostgreSQL-compatible format
+Enhanced SQL Server to PostgreSQL SQL Dump Converter
+Handles complex SQL Server syntax including constraints, indexes, and more
 Usage: python convert_sql.py input.sql output.sql
 """
 import re
@@ -25,7 +25,7 @@ def convert_sqlserver_to_postgres(input_file, output_file):
     print(f"Original file size: {original_size:,} bytes")
     
     # ===== STEP 1: Remove SQL Server Specific Commands =====
-    print("\n[1/10] Removing SQL Server specific commands...")
+    print("\n[1/12] Removing SQL Server specific commands...")
     sql = re.sub(r'USE\s+\[.*?\]\s*', '', sql, flags=re.IGNORECASE)
     sql = re.sub(r'\bGO\b\s*', ';\n', sql, flags=re.IGNORECASE)
     sql = re.sub(r'SET\s+ANSI_NULLS\s+(ON|OFF)\s*', '', sql, flags=re.IGNORECASE)
@@ -37,11 +37,28 @@ def convert_sqlserver_to_postgres(input_file, output_file):
     sql = re.sub(r'SET\s+ARITHABORT\s+(ON|OFF)\s*', '', sql, flags=re.IGNORECASE)
     
     # ===== STEP 2: Convert Square Brackets to Double Quotes =====
-    print("[2/10] Converting identifier syntax [name] to \"name\"...")
+    print("[2/12] Converting identifier syntax [name] to \"name\"...")
     sql = re.sub(r'\[([^\]]+)\]', r'"\1"', sql)
     
-    # ===== STEP 3: Convert Data Types =====
-    print("[3/10] Converting data types...")
+    # ===== STEP 3: Handle IDENTITY columns (before data type conversion) =====
+    print("[3/12] Converting IDENTITY columns...")
+    # INT IDENTITY(1,1) NOT NULL -> SERIAL NOT NULL
+    sql = re.sub(r'\bINT\s+IDENTITY\s*\(\s*\d+\s*,\s*\d+\s*\)\s+NOT\s+NULL', 'SERIAL NOT NULL', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\bBIGINT\s+IDENTITY\s*\(\s*\d+\s*,\s*\d+\s*\)\s+NOT\s+NULL', 'BIGSERIAL NOT NULL', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\bSMALLINT\s+IDENTITY\s*\(\s*\d+\s*,\s*\d+\s*\)\s+NOT\s+NULL', 'SMALLSERIAL NOT NULL', sql, flags=re.IGNORECASE)
+    
+    # INT IDENTITY(1,1) -> SERIAL
+    sql = re.sub(r'\bINT\s+IDENTITY\s*\(\s*\d+\s*,\s*\d+\s*\)', 'SERIAL', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\bBIGINT\s+IDENTITY\s*\(\s*\d+\s*,\s*\d+\s*\)', 'BIGSERIAL', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\bSMALLINT\s+IDENTITY\s*\(\s*\d+\s*,\s*\d+\s*\)', 'SMALLSERIAL', sql, flags=re.IGNORECASE)
+    
+    # INT IDENTITY -> SERIAL
+    sql = re.sub(r'\bINT\s+IDENTITY\b', 'SERIAL', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\bBIGINT\s+IDENTITY\b', 'BIGSERIAL', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\bSMALLINT\s+IDENTITY\b', 'SMALLSERIAL', sql, flags=re.IGNORECASE)
+    
+    # ===== STEP 4: Convert Data Types =====
+    print("[4/12] Converting data types...")
     
     # String types
     sql = re.sub(r'\bNVARCHAR\s*\(\s*MAX\s*\)', 'TEXT', sql, flags=re.IGNORECASE)
@@ -51,7 +68,6 @@ def convert_sqlserver_to_postgres(input_file, output_file):
     sql = re.sub(r'\bNVARCHAR2\b', 'VARCHAR', sql, flags=re.IGNORECASE)
     sql = re.sub(r'\bNCHAR\s*\(', 'CHAR(', sql, flags=re.IGNORECASE)
     sql = re.sub(r'\bNTEXT\b', 'TEXT', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'\bTEXT\b(?!\s*\()', 'TEXT', sql, flags=re.IGNORECASE)
     
     # Binary types
     sql = re.sub(r'\bIMAGE\b', 'BYTEA', sql, flags=re.IGNORECASE)
@@ -72,31 +88,45 @@ def convert_sqlserver_to_postgres(input_file, output_file):
     # GUID/UUID
     sql = re.sub(r'\bUNIQUEIDENTIFIER\b', 'UUID', sql, flags=re.IGNORECASE)
     
-    # XML type stays the same in PostgreSQL
-    # HIERARCHYID doesn't have direct equivalent - keep as is for manual review
+    # ===== STEP 5: Remove CLUSTERED/NONCLUSTERED Keywords =====
+    print("[5/12] Removing CLUSTERED/NONCLUSTERED keywords...")
+    sql = re.sub(r'\bCLUSTERED\s+', '', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\bNONCLUSTERED\s+', '', sql, flags=re.IGNORECASE)
     
-    # ===== STEP 4: Convert IDENTITY to SERIAL/GENERATED =====
-    print("[4/10] Converting IDENTITY columns...")
-    sql = re.sub(r'\bINT\s+IDENTITY\s*\(\s*1\s*,\s*1\s*\)', 'SERIAL', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'\bBIGINT\s+IDENTITY\s*\(\s*1\s*,\s*1\s*\)', 'BIGSERIAL', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'\bSMALLINT\s+IDENTITY\s*\(\s*1\s*,\s*1\s*\)', 'SMALLSERIAL', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'\bINT\s+IDENTITY\b', 'SERIAL', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'\bBIGINT\s+IDENTITY\b', 'BIGSERIAL', sql, flags=re.IGNORECASE)
+    # ===== STEP 6: Handle PRIMARY KEY Constraints =====
+    print("[6/12] Converting PRIMARY KEY constraints...")
+    # Remove constraint names before PRIMARY KEY
+    sql = re.sub(r'CONSTRAINT\s+"[^"]+"\s+PRIMARY\s+KEY', 'PRIMARY KEY', sql, flags=re.IGNORECASE)
     
-    # ===== STEP 5: Convert Functions =====
-    print("[5/10] Converting functions...")
+    # ===== STEP 7: Handle WITH clauses in constraints =====
+    print("[7/12] Removing WITH clauses from constraints...")
+    # Remove WITH (PAD_INDEX = ..., STATISTICS_NORECOMPUTE = ..., etc.)
+    sql = re.sub(r'WITH\s*\([^)]*PAD_INDEX[^)]*\)\s*', '', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'WITH\s*\([^)]*STATISTICS_NORECOMPUTE[^)]*\)\s*', '', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'WITH\s*\([^)]*IGNORE_DUP_KEY[^)]*\)\s*', '', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'WITH\s*\([^)]*ALLOW_ROW_LOCKS[^)]*\)\s*', '', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'WITH\s*\([^)]*ALLOW_PAGE_LOCKS[^)]*\)\s*', '', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'WITH\s*\([^)]*FILLFACTOR[^)]*\)\s*', '', sql, flags=re.IGNORECASE)
+    
+    # ===== STEP 8: Handle ON [PRIMARY] clauses =====
+    print("[8/12] Removing ON [PRIMARY] and filegroup clauses...")
+    sql = re.sub(r'\s+ON\s+"PRIMARY"\s*', ' ', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\s+ON\s+PRIMARY\s*', ' ', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\s+ON\s+\[PRIMARY\]\s*', ' ', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\s+TEXTIMAGE_ON\s+"PRIMARY"\s*', ' ', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'\s+TEXTIMAGE_ON\s+\[PRIMARY\]\s*', ' ', sql, flags=re.IGNORECASE)
+    
+    # ===== STEP 9: Convert Functions =====
+    print("[9/12] Converting functions...")
     
     # Date functions
     sql = re.sub(r'\bGETDATE\s*\(\s*\)', 'CURRENT_TIMESTAMP', sql, flags=re.IGNORECASE)
     sql = re.sub(r'\bGETUTCDATE\s*\(\s*\)', 'CURRENT_TIMESTAMP', sql, flags=re.IGNORECASE)
     sql = re.sub(r'\bSYSDATETIME\s*\(\s*\)', 'CURRENT_TIMESTAMP', sql, flags=re.IGNORECASE)
     sql = re.sub(r'\bSYSDATETIMEOFFSET\s*\(\s*\)', 'CURRENT_TIMESTAMP', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'\bCURRENT_TIMESTAMP\s*\(\s*\)', 'CURRENT_TIMESTAMP', sql, flags=re.IGNORECASE)
     
     # String functions
     sql = re.sub(r'\bLEN\s*\(', 'LENGTH(', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'\bCHARINDEX\s*\(', 'POSITION(', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'\bSTUFF\s*\(', 'OVERLAY(', sql, flags=re.IGNORECASE)
     
     # NULL handling
     sql = re.sub(r'\bISNULL\s*\(', 'COALESCE(', sql, flags=re.IGNORECASE)
@@ -105,18 +135,8 @@ def convert_sqlserver_to_postgres(input_file, output_file):
     sql = re.sub(r'\bNEWID\s*\(\s*\)', 'gen_random_uuid()', sql, flags=re.IGNORECASE)
     sql = re.sub(r'\bNEWSEQUENTIALID\s*\(\s*\)', 'gen_random_uuid()', sql, flags=re.IGNORECASE)
     
-    # Conversion functions
-    sql = re.sub(r'\bCONVERT\s*\(\s*VARCHAR', 'CAST(', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'\bCAST\s*\(\s*([^)]+)\s+AS\s+DATETIME\s*\)', r'CAST(\1 AS TIMESTAMP)', sql, flags=re.IGNORECASE)
-    
-    # ===== STEP 6: Convert TOP to LIMIT =====
-    print("[6/10] Converting TOP to LIMIT...")
-    # This is a simplified conversion - complex TOP with ORDER BY needs manual review
-    sql = re.sub(r'\bSELECT\s+TOP\s+\(\s*(\d+)\s*\)\s+', r'SELECT ', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'\bSELECT\s+TOP\s+(\d+)\s+', r'SELECT ', sql, flags=re.IGNORECASE)
-    
-    # ===== STEP 7: Remove Query Hints =====
-    print("[7/10] Removing query hints...")
+    # ===== STEP 10: Remove Query Hints =====
+    print("[10/12] Removing query hints...")
     sql = re.sub(r'WITH\s*\(\s*NOLOCK\s*\)', '', sql, flags=re.IGNORECASE)
     sql = re.sub(r'WITH\s*\(\s*READUNCOMMITTED\s*\)', '', sql, flags=re.IGNORECASE)
     sql = re.sub(r'WITH\s*\(\s*ROWLOCK\s*\)', '', sql, flags=re.IGNORECASE)
@@ -124,30 +144,31 @@ def convert_sqlserver_to_postgres(input_file, output_file):
     sql = re.sub(r'WITH\s*\(\s*HOLDLOCK\s*\)', '', sql, flags=re.IGNORECASE)
     sql = re.sub(r'WITH\s*\(\s*TABLOCK\s*\)', '', sql, flags=re.IGNORECASE)
     
-    # ===== STEP 8: Convert Constraints =====
-    print("[8/10] Converting constraints...")
-    # CLUSTERED/NONCLUSTERED keywords
-    sql = re.sub(r'\bCLUSTERED\s+INDEX\b', 'INDEX', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'\bNONCLUSTERED\s+INDEX\b', 'INDEX', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'\bCLUSTERED\s+PRIMARY\s+KEY\b', 'PRIMARY KEY', sql, flags=re.IGNORECASE)
-    sql = re.sub(r'\bNONCLUSTERED\s+PRIMARY\s+KEY\b', 'PRIMARY KEY', sql, flags=re.IGNORECASE)
-    
-    # ===== STEP 9: Convert Default Constraints =====
-    print("[9/10] Converting default constraints...")
-    # Remove constraint names from defaults (PostgreSQL handles differently)
+    # ===== STEP 11: Convert Default Constraints =====
+    print("[11/12] Converting default constraints...")
+    # Remove constraint names from defaults
     sql = re.sub(r'CONSTRAINT\s+"[^"]+"\s+DEFAULT\s+', 'DEFAULT ', sql, flags=re.IGNORECASE)
     
-    # Convert bit defaults
+    # Convert bit defaults (0/1 to FALSE/TRUE)
     sql = re.sub(r'DEFAULT\s+\(\s*\(\s*0\s*\)\s*\)', 'DEFAULT FALSE', sql, flags=re.IGNORECASE)
     sql = re.sub(r'DEFAULT\s+\(\s*\(\s*1\s*\)\s*\)', 'DEFAULT TRUE', sql, flags=re.IGNORECASE)
     sql = re.sub(r'DEFAULT\s+\(\s*0\s*\)', 'DEFAULT FALSE', sql, flags=re.IGNORECASE)
     sql = re.sub(r'DEFAULT\s+\(\s*1\s*\)', 'DEFAULT TRUE', sql, flags=re.IGNORECASE)
     
-    # ===== STEP 10: Clean Up Formatting =====
-    print("[10/10] Cleaning up formatting...")
-    
     # Remove extra parentheses around defaults
-    sql = re.sub(r'DEFAULT\s+\(\s*\(([^)]+)\)\s*\)', r'DEFAULT \1', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'DEFAULT\s+\(\s*\(([^)]+)\)\s*\)', r'DEFAULT (\1)', sql, flags=re.IGNORECASE)
+    
+    # ===== STEP 12: Handle CHECK Constraints =====
+    print("[12/12] Converting CHECK constraints...")
+    # Remove constraint names from CHECK constraints
+    sql = re.sub(r'CONSTRAINT\s+"[^"]+"\s+CHECK\s+', 'CHECK ', sql, flags=re.IGNORECASE)
+    
+    # Convert (([column]=(0))) to (column = FALSE)
+    sql = re.sub(r'CHECK\s+\(\s*\(\s*"([^"]+)"\s*=\s*\(\s*0\s*\)\s*\)\s*\)', r'CHECK ("\1" = FALSE)', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'CHECK\s+\(\s*\(\s*"([^"]+)"\s*=\s*\(\s*1\s*\)\s*\)\s*\)', r'CHECK ("\1" = TRUE)', sql, flags=re.IGNORECASE)
+    
+    # ===== FINAL: Clean Up Formatting =====
+    print("\nCleaning up formatting...")
     
     # Clean up multiple semicolons
     sql = re.sub(r';\s*;+', ';', sql)
@@ -158,15 +179,28 @@ def convert_sqlserver_to_postgres(input_file, output_file):
     # Remove trailing spaces
     sql = re.sub(r' +\n', '\n', sql)
     
+    # Clean up spaces before commas and semicolons
+    sql = re.sub(r'\s+,', ',', sql)
+    sql = re.sub(r'\s+;', ';', sql)
+    
     # Add PostgreSQL header comment
     header = """-- Converted from SQL Server to PostgreSQL
 -- Original file: {}
 -- Conversion date: {}
--- Note: This is an automated conversion. Please review for:
---   1. Stored procedures (need manual conversion to PL/pgSQL)
---   2. Triggers (syntax differences)
---   3. Complex constraints
---   4. Application-specific logic
+-- 
+-- IMPORTANT NOTES:
+-- 1. Stored procedures require manual conversion to PL/pgSQL
+-- 2. Triggers have different syntax in PostgreSQL
+-- 3. Some SQL Server features may not have direct PostgreSQL equivalents
+-- 4. Review all constraints and indexes carefully
+-- 5. Test thoroughly before using in production
+--
+-- Common remaining issues to check:
+-- - Stored procedures and functions
+-- - Triggers
+-- - Cursors
+-- - Complex constraints
+-- - Application-specific logic
 
 """.format(input_file, __import__('datetime').datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
     
@@ -180,42 +214,46 @@ def convert_sqlserver_to_postgres(input_file, output_file):
     converted_size = len(sql)
     
     # Summary
-    print("\n" + "="*60)
+    print("\n" + "="*70)
     print("CONVERSION COMPLETE!")
-    print("="*60)
+    print("="*70)
     print(f"Original size:   {original_size:,} bytes")
     print(f"Converted size:  {converted_size:,} bytes")
     print(f"Size difference: {converted_size - original_size:+,} bytes")
-    print("\n" + "="*60)
+    print("\n" + "="*70)
     print("NEXT STEPS:")
-    print("="*60)
-    print(f"1. Review the converted file for any issues:")
-    print(f"   - Stored procedures need manual conversion")
-    print(f"   - Check for any SQL Server-specific features")
-    print(f"   - Verify data type conversions")
+    print("="*70)
+    print(f"1. Review the converted file: {output_file}")
+    print(f"   Look for:")
+    print(f"   - Stored procedures (need manual conversion)")
+    print(f"   - Triggers (different syntax)")
+    print(f"   - Any remaining SQL Server-specific syntax")
     print(f"\n2. Import to PostgreSQL:")
     print(f"   psql -U username -d database -f {output_file}")
-    print(f"\n3. If you encounter errors during import:")
+    print(f"\n3. Capture errors if any:")
     print(f"   psql -U username -d database -f {output_file} 2> errors.log")
-    print(f"   (Check errors.log for details)")
-    print("="*60)
+    print(f"\n4. Common PostgreSQL commands after import:")
+    print(f"   \\dt         - List tables")
+    print(f"   \\d+ table   - Describe table structure")
+    print(f"   \\di         - List indexes")
+    print("="*70)
 
 def main():
     """Main function to handle command line arguments"""
     
     # Check arguments
     if len(sys.argv) != 3:
-        print("="*60)
-        print("SQL Server to PostgreSQL Converter")
-        print("="*60)
+        print("="*70)
+        print("SQL Server to PostgreSQL Converter (Enhanced)")
+        print("="*70)
         print("\nUsage:")
         print("  python convert_sql.py input_file.sql output_file.sql")
         print("\nExample:")
         print("  python convert_sql.py sqlserver_dump.sql postgres_dump.sql")
         print("\nDescription:")
         print("  Converts SQL Server .sql dump files to PostgreSQL format")
-        print("  Handles data types, functions, identifiers, and constraints")
-        print("="*60)
+        print("  Handles: data types, IDENTITY, constraints, indexes, and more")
+        print("="*70)
         sys.exit(1)
     
     input_file = sys.argv[1]
